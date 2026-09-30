@@ -1,0 +1,884 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>somethingsdontmix</title>
+<style>
+  :root {
+    --panel-bg: rgba(255, 255, 255, 0.72);
+    --panel-fg: #2b2b28;
+    --panel-line: rgba(0, 0, 0, 0.22);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --panel-bg: rgba(28, 28, 26, 0.72);
+      --panel-fg: #ecebe7;
+      --panel-line: rgba(255, 255, 255, 0.28);
+    }
+  }
+  :root[data-theme="dark"] {
+    --panel-bg: rgba(28, 28, 26, 0.72);
+    --panel-fg: #ecebe7;
+    --panel-line: rgba(255, 255, 255, 0.28);
+  }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #ECEBE7;
+  }
+  canvas {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    touch-action: none;        /* pointer events drive the finger */
+    cursor: default;              /* no visible cursor inside the simulation */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  #panel {
+    position: fixed;
+    left: max(12px, env(safe-area-inset-left, 0px));
+    bottom: max(12px, env(safe-area-inset-bottom, 0px));
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--panel-bg);
+    color: var(--panel-fg);
+    font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    opacity: 0.55;
+    transition: opacity 0.2s;
+  }
+  #panel:hover, #panel:focus-within { opacity: 1; }
+  #panel label, #panel button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: inherit;
+    font: inherit;
+  }
+  #panel button {
+    background: none;
+    border: 1px solid var(--panel-line);
+    border-radius: 4px;
+    padding: 3px 8px;
+    cursor: pointer;
+  }
+  #panel button:focus-visible, #panel input:focus-visible {
+    outline: 2px solid var(--panel-fg);
+    outline-offset: 2px;
+  }
+  #panel input[type="color"] {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--panel-line);
+    border-radius: 4px;
+    background: none;
+    cursor: pointer;
+  }
+  @media (max-width: 420px) { #panel { gap: 8px; padding: 6px 8px; } }
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Oil and vinegar simulation"></canvas>
+<div id="panel">
+  <button id="interaction" type="button" aria-pressed="true">Interaction: ON</button>
+  <button id="export" type="button">Export Wallpaper</button>
+
+  <label>Oil <input id="oilColor" type="color" value="#AEB96F"></label>
+  <label>Vinegar <input id="vinegarColor" type="color" value="#ECEBE7"></label>
+</div>
+
+<script>
+(() => {
+'use strict';
+
+/* =====================================================================
+   CONFIGURATION
+   ===================================================================== */
+const config = {
+  oilColor: '#3a2228',
+  vinegarColor: '#d5cfc8',
+  oilRatio: 0.70,
+
+  grid: {
+    cells: 57600,          // ~320x180; the grid is derived from the viewport aspect
+    cellsSmall: 42000,     // small screens
+    maxDPR: 1.5,
+    stepsPerSecond: 30
+  },
+
+  // Phase field (volume-preserving Allen–Cahn: interface tension + sharp interfaces)
+  phase: {
+  kappa: 2.0,
+  mobility: 2.0,
+  substeps: 2
+},
+
+  // Slow, divergence-free background stirring (stream function, no-flux walls)
+  flow: {
+    speed: 1.2,
+    modes: [
+      { m: 1, n: 1, v: 2.6, w: 0.13 },
+      { m: 2, n: 1, v: 2.2, w: 0.19 },
+      { m: 1, n: 2, v: 2.2, w: 0.23 },
+      { m: 2, n: 2, v: 1.8, w: 0.29 },
+      { m: 3, n: 2, v: 1.5, w: 0.17 },
+      { m: 2, n: 3, v: 1.5, w: 0.21 }
+    ]
+  },
+
+  interaction: {
+    enabled: true,
+    radius: 0.09,          // finger radius (gaussian sigma) as a fraction of sqrt(W*H)
+    strength: 0.1,        // velocity coupling per stamp (no-slip to the finger)
+    smoothing: 0.5,        // 0..1, pointer velocity smoothing
+    maxSpeed: 140,         // cells / second
+    damping: 0.28,         // seconds; how quickly pushed liquid comes to rest
+    projectionIterations: 24
+  }
+};
+
+/* =====================================================================
+   SIMULATION  (DOM-free)
+   State: phase field c in [-1,1] (+1 oil, -1 vinegar), velocity field,
+   surface tension, viscosity (damping), phase separation (Allen–Cahn).
+   ===================================================================== */
+// SIM-BEGIN
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function boxH(src, dst, W, H, r) {
+  const inv = 1 / (2 * r + 1);
+  for (let y = 0; y < H; y++) {
+    const o = y * W;
+    let s = 0;
+    for (let k = -r; k <= r; k++) s += src[o + (((k % W) + W) % W)];
+    for (let x = 0; x < W; x++) {
+      dst[o + x] = s * inv;
+      s += src[o + ((x + r + 1) % W)] - src[o + ((((x - r) % W) + W) % W)];
+    }
+  }
+}
+function boxV(src, dst, W, H, r) {
+  const inv = 1 / (2 * r + 1);
+  for (let x = 0; x < W; x++) {
+    let s = 0;
+    for (let k = -r; k <= r; k++) s += src[(((k % H) + H) % H) * W + x];
+    for (let y = 0; y < H; y++) {
+      dst[y * W + x] = s * inv;
+      s += src[((y + r + 1) % H) * W + x] - src[((((y - r) % H) + H) % H) * W + x];
+    }
+  }
+}
+function gaussBlur(a, W, H, sx, sy) {
+  const tmp = new Float32Array(a.length);
+  const rad = s => Math.max(1, Math.round((Math.sqrt(12 * s * s / 3 + 1) - 1) / 2));
+  const rx = rad(sx), ry = rad(sy);
+  for (let p = 0; p < 3; p++) {
+    boxH(a, tmp, W, H, rx);
+    boxV(tmp, a, W, H, ry);
+  }
+}
+
+class Simulation {
+  constructor(cfg, cols, rows) {
+    this.cfg = cfg;
+    this.rng = mulberry32(cfg.seed != null ? cfg.seed : (Math.random() * 4294967296) >>> 0);
+    this.modes = cfg.flow.modes.map(m => ({
+      ...m, p: this.rng() * Math.PI * 2, p2: this.rng() * Math.PI * 2
+    }));
+    this.nm = this.modes.length;
+    this.time = this.rng() * 200;
+    this.massTarget = 0;
+    this.userActive = false;
+    this._alloc(cols, rows);
+    this._initField();
+  }
+
+  _alloc(cols, rows) {
+    const N = cols * rows, nm = this.nm;
+    this.cols = cols; this.rows = rows; this.N = N;
+    this.c = new Float32Array(N);
+    this.tmp = new Float32Array(N);
+    this.mu = new Float32Array(N);
+    this.ux = new Float32Array(N);
+    this.uy = new Float32Array(N);
+    this.pr = new Float32Array(N);
+    this.dv = new Float32Array(N);
+    this.sinX = new Float32Array(nm * cols);
+    this.cosX = new Float32Array(nm * cols);
+    this.sinY = new Float32Array(nm * rows);
+    this.cosY = new Float32Array(nm * rows);
+    this.ca = new Float32Array(nm);
+    this.cb = new Float32Array(nm);
+    this.rsy = new Float32Array(nm);
+    this.rcy = new Float32Array(nm);
+    for (let q = 0; q < nm; q++) {
+      const md = this.modes[q];
+      for (let i = 0; i < cols; i++) {
+        const a = md.m * Math.PI * (i + 0.5) / cols;
+        this.sinX[q * cols + i] = Math.sin(a);
+        this.cosX[q * cols + i] = Math.cos(a);
+      }
+      for (let j = 0; j < rows; j++) {
+        const a = md.n * Math.PI * (j + 0.5) / rows;
+        this.sinY[q * rows + j] = Math.sin(a);
+        this.cosY[q * rows + j] = Math.cos(a);
+      }
+    }
+  }
+
+  get scale() { return Math.sqrt(this.cols * this.rows); }
+
+  /* Initial condition: nodal domains of smooth anisotropic noise.
+     Vinegar = band around the zero level set of the noise, so oil forms a few
+     large asymmetric regions separated by winding vinegar channels. */
+  _initField() {
+    const W = this.cols, H = this.rows, N = this.N, S = this.scale;
+    const rnd = this.rng;
+    const noise = (sx, sy) => {
+      const a = new Float32Array(N);
+      for (let k = 0; k < N; k++) a[k] = rnd() * 2 - 1;
+      gaussBlur(a, W, H, sx, sy);
+      let mean = 0; for (let k = 0; k < N; k++) mean += a[k]; mean /= N;
+      let v = 0; for (let k = 0; k < N; k++) { a[k] -= mean; v += a[k] * a[k]; }
+      const sd = Math.sqrt(v / N) || 1;
+      for (let k = 0; k < N; k++) a[k] /= sd;
+      return a;
+    };
+    const bigAniso = 0.75 + rnd() * 0.6;
+    const n1 = noise(0.15 * S * bigAniso, 0.15 * S / bigAniso);
+    const n2 = noise(0.055 * S, 0.055 * S);
+    const n3 = noise(0.11 * S / bigAniso, 0.11 * S * bigAniso);
+    const a = new Float32Array(N);
+    for (let k = 0; k < N; k++) a[k] = Math.abs(n1[k] + 0.45 * n3[k] + 0.22 * n2[k]);
+
+    // threshold so that exactly (1 - oilRatio) of the area is vinegar
+    const sorted = Float32Array.from(a).sort();
+    const t = sorted[Math.min(N - 1, Math.floor((1 - this.cfg.oilRatio) * N))];
+
+    const w0 = Math.sqrt(2 * this.cfg.phase.kappa);
+    const c = this.c;
+    for (let j = 0; j < H; j++) {
+      for (let i = 0; i < W; i++) {
+        const k = j * W + i;
+        const gx = (a[j * W + Math.min(i + 1, W - 1)] - a[j * W + Math.max(i - 1, 0)]) * 0.5;
+        const gy = (a[Math.min(j + 1, H - 1) * W + i] - a[Math.max(j - 1, 0) * W + i]) * 0.5;
+        const g = Math.max(Math.hypot(gx, gy), 2e-3);
+        c[k] = Math.tanh((a[k] - t) / g / w0);
+      }
+    }
+
+    // relax interfaces, keep volume, then calibrate the exact 70/30 area split
+    let sum = 0; for (let k = 0; k < N; k++) sum += c[k];
+    this.massTarget = sum;
+    for (let it = 0; it < 50; it++) this._relax(0.05);
+    let oil = 0, sc = 0;
+    for (let k = 0; k < N; k++) { if (c[k] > 0) oil++; sc += c[k]; }
+    const f = oil / N;
+    const offset = sc - (2 * f - 1) * N;
+    this.massTarget = (2 * this.cfg.oilRatio - 1) * N + offset;
+    for (let it = 0; it < 40; it++) this._relax(0.05);
+  }
+
+  /* Resample the existing state onto a new grid (window resize). */
+  resize(cols, rows) {
+    if (cols === this.cols && rows === this.rows) return;
+    const oW = this.cols, oH = this.rows, old = this.c, oldN = this.N;
+    const oldTarget = this.massTarget;
+    this._alloc(cols, rows);
+    const c = this.c;
+    for (let j = 0; j < rows; j++) {
+      const y = Math.min(Math.max((j + 0.5) / rows * oH - 0.5, 0), oH - 1);
+      const j0 = y | 0, j1 = Math.min(j0 + 1, oH - 1), fy = y - j0;
+      for (let i = 0; i < cols; i++) {
+        const x = Math.min(Math.max((i + 0.5) / cols * oW - 0.5, 0), oW - 1);
+        const i0 = x | 0, i1 = Math.min(i0 + 1, oW - 1), fx = x - i0;
+        const a = old[j0 * oW + i0] * (1 - fx) + old[j0 * oW + i1] * fx;
+        const b = old[j1 * oW + i0] * (1 - fx) + old[j1 * oW + i1] * fx;
+        c[j * cols + i] = a * (1 - fy) + b * fy;
+      }
+    }
+    this.massTarget = oldTarget * (this.N / oldN);
+    this.userActive = false;
+    for (let it = 0; it < 6; it++) this._relax(0.05);
+  }
+
+  oilFraction() {
+    let n = 0; const c = this.c;
+    for (let k = 0; k < this.N; k++) if (c[k] > 0) n++;
+    return n / this.N;
+  }
+
+  /* ---------------- stepping ---------------- */
+  step(dt) {
+    this.time += dt;
+    this._updateAmbient();
+    if (this.userActive) this._decayAndProject(dt);
+    this._advect(dt);
+    const ph = this.cfg.phase;
+    const theta = Math.min(0.1, ph.mobility * dt / ph.substeps);
+    for (let s = 0; s < ph.substeps; s++) this._relax(theta);
+  }
+
+  _updateAmbient() {
+    const W = this.cols, H = this.rows, S = this.scale, t = this.time;
+    const sp = this.cfg.flow.speed;
+    for (let q = 0; q < this.nm; q++) {
+      const md = this.modes[q];
+      const amp = 0.62 * Math.sin(md.w * t + md.p) + 0.38 * Math.sin(md.w * 1.618 * t + md.p2);
+      const A = md.v * sp * S / (Math.PI * Math.hypot(md.m, md.n)) * amp;
+      this.ca[q] = A * md.n * Math.PI / H;   //  u =  dpsi/dy
+      this.cb[q] = A * md.m * Math.PI / W;   //  v = -dpsi/dx
+    }
+  }
+
+  /* Semi-Lagrangian advection of the phase field by ambient + finger velocity. */
+  _advect(dt) {
+    const W = this.cols, H = this.rows, nm = this.nm;
+    const c = this.c, out = this.tmp, ux = this.ux, uy = this.uy;
+    const { sinX, cosX, sinY, cosY, ca, cb, rsy, rcy } = this;
+    const W1 = W - 1, H1 = H - 1;
+    for (let j = 0; j < H; j++) {
+      for (let q = 0; q < nm; q++) { rsy[q] = sinY[q * H + j]; rcy[q] = cosY[q * H + j]; }
+      for (let i = 0; i < W; i++) {
+        let ax = 0, ay = 0;
+        for (let q = 0; q < nm; q++) {
+          const o = q * W + i;
+          ax += ca[q] * sinX[o] * rcy[q];
+          ay -= cb[q] * cosX[o] * rsy[q];
+        }
+        const k = j * W + i;
+        let x = i - (ax + ux[k]) * dt;
+        let y = j - (ay + uy[k]) * dt;
+        x = x < 0 ? 0 : (x > W1 ? W1 : x);
+        y = y < 0 ? 0 : (y > H1 ? H1 : y);
+        const i0 = x | 0, j0 = y | 0;
+        const i1 = i0 < W1 ? i0 + 1 : W1, j1 = j0 < H1 ? j0 + 1 : H1;
+        const fx = x - i0, fy = y - j0;
+        const a = c[j0 * W + i0] * (1 - fx) + c[j0 * W + i1] * fx;
+        const b = c[j1 * W + i0] * (1 - fx) + c[j1 * W + i1] * fx;
+        out[k] = a * (1 - fy) + b * fy;
+      }
+    }
+    this.tmp = c; this.c = out;
+  }
+
+  /* Volume-preserving Allen–Cahn relaxation:
+     dc/dt = -(c^3 - c - kappa*lap c) + lambda*(1-c^2)
+     lambda is an interface-localised Lagrange multiplier keeping the oil volume fixed. */
+  _relax(theta) {
+    const W = this.cols, H = this.rows, kap = this.cfg.phase.kappa;
+    const c = this.c, mu = this.mu;
+    let sumMu = 0, sumW = 0, sumC = 0;
+    for (let j = 0; j < H; j++) {
+      const ju = j > 0 ? -W : 0, jd = j < H - 1 ? W : 0;
+      for (let i = 0; i < W; i++) {
+        const k = j * W + i;
+        const cc = c[k];
+        const l = c[i > 0 ? k - 1 : k], r = c[i < W - 1 ? k + 1 : k];
+        const u = c[k + ju], d = c[k + jd];
+        const m = cc * cc * cc - cc - kap * (l + r + u + d - 4 * cc);
+        mu[k] = m;
+        sumMu += m;
+        const w = 1 - cc * cc;
+        if (w > 0) sumW += w;
+        sumC += cc;
+      }
+    }
+    const lam = sumW > 1 ? (sumMu + (this.massTarget - sumC) / theta) / sumW : 0;
+    const N = this.N;
+    for (let k = 0; k < N; k++) {
+      let cc = c[k];
+      let w = 1 - cc * cc; if (w < 0) w = 0;
+      cc += theta * (-mu[k] + lam * w);
+      c[k] = cc > 1 ? 1 : (cc < -1 ? -1 : cc);
+    }
+  }
+
+  /* ---------------- finger ---------------- */
+  /* The finger couples the local velocity field to the pointer velocity
+     (no-slip gaussian footprint). Direction comes from the movement itself. */
+  pushSegment(x0, y0, x1, y1, vx, vy) {
+    const sigma = Math.max(2, this.cfg.interaction.radius * this.scale);
+    const dist = Math.hypot(x1 - x0, y1 - y0);
+    const n = Math.max(1, Math.ceil(dist / (sigma * 0.5)));
+    for (let s = 1; s <= n; s++) {
+      const t = s / n;
+      this._stamp(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, vx, vy, sigma);
+    }
+    this.userActive = true;
+  }
+
+  _stamp(cx, cy, vx, vy, sigma) {
+    const W = this.cols, H = this.rows, ux = this.ux, uy = this.uy;
+    const R = Math.ceil(sigma * 2.6);
+    const i0 = Math.max(0, Math.floor(cx - R)), i1 = Math.min(W - 1, Math.ceil(cx + R));
+    const j0 = Math.max(0, Math.floor(cy - R)), j1 = Math.min(H - 1, Math.ceil(cy + R));
+    const inv = 1 / (2 * sigma * sigma);
+    const a = this.cfg.interaction.strength;
+    for (let j = j0; j <= j1; j++) {
+      const dy = j + 0.5 - cy;
+      for (let i = i0; i <= i1; i++) {
+        const dx = i + 0.5 - cx;
+        const b = a * Math.exp(-(dx * dx + dy * dy) * inv);
+        const k = j * W + i;
+        ux[k] += (vx - ux[k]) * b;
+        uy[k] += (vy - uy[k]) * b;
+      }
+    }
+  }
+
+  clearUser() {
+    this.ux.fill(0); this.uy.fill(0); this.pr.fill(0);
+    this.userActive = false;
+  }
+
+  _decayAndProject(dt) {
+    const N = this.N, ux = this.ux, uy = this.uy;
+    const f = Math.exp(-dt / this.cfg.interaction.damping);
+    let mx = 0;
+    for (let k = 0; k < N; k++) {
+      const a = ux[k] * f, b = uy[k] * f;
+      ux[k] = a; uy[k] = b;
+      const m = a * a + b * b;
+      if (m > mx) mx = m;
+    }
+    if (mx < 0.03) { this.clearUser(); return; }
+    this._project();
+  }
+
+  /* Make the finger velocity divergence-free (incompressible liquid): pushed oil
+     has to flow around and past the finger instead of piling up. */
+  _project() {
+    const W = this.cols, H = this.rows, ux = this.ux, uy = this.uy, p = this.pr, dv = this.dv;
+    for (let j = 0; j < H; j++) { ux[j * W] = 0; ux[j * W + W - 1] = 0; }
+    for (let i = 0; i < W; i++) { uy[i] = 0; uy[(H - 1) * W + i] = 0; }
+    for (let j = 0; j < H; j++) {
+      const ju = j > 0 ? -W : 0, jd = j < H - 1 ? W : 0;
+      for (let i = 0; i < W; i++) {
+        const k = j * W + i;
+        const l = i > 0 ? k - 1 : k, r = i < W - 1 ? k + 1 : k;
+        dv[k] = 0.5 * ((ux[r] - ux[l]) + (uy[k + jd] - uy[k + ju]));
+      }
+    }
+    const iters = this.cfg.interaction.projectionIterations;
+    for (let it = 0; it < iters; it++) {
+      for (let j = 0; j < H; j++) {
+        const ju = j > 0 ? -W : 0, jd = j < H - 1 ? W : 0;
+        for (let i = 0; i < W; i++) {
+          const k = j * W + i;
+          const l = i > 0 ? k - 1 : k, r = i < W - 1 ? k + 1 : k;
+          p[k] = (p[l] + p[r] + p[k + ju] + p[k + jd] - dv[k]) * 0.25;
+        }
+      }
+    }
+    for (let j = 0; j < H; j++) {
+      const ju = j > 0 ? -W : 0, jd = j < H - 1 ? W : 0;
+      for (let i = 0; i < W; i++) {
+        const k = j * W + i;
+        const l = i > 0 ? k - 1 : k, r = i < W - 1 ? k + 1 : k;
+        ux[k] -= 0.5 * (p[r] - p[l]);
+        uy[k] -= 0.5 * (p[k + jd] - p[k + ju]);
+      }
+    }
+    for (let j = 0; j < H; j++) { ux[j * W] = 0; ux[j * W + W - 1] = 0; }
+    for (let i = 0; i < W; i++) { uy[i] = 0; uy[(H - 1) * W + i] = 0; }
+  }
+}
+// SIM-END
+
+/* =====================================================================
+   RENDERING  (flat two-colour threshold of the smooth phase field)
+   ===================================================================== */
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255];
+}
+
+class Renderer {
+  constructor(canvas, cfg) {
+    this.canvas = canvas; this.cfg = cfg;
+    this.gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'low-power', preserveDrawingBuffer: true });
+    this.mode = this.gl ? 'gl' : '2d';
+    this.oil = hexToRgb(cfg.oilColor);
+    this.vin = hexToRgb(cfg.vinegarColor);
+    this.cols = 0; this.rows = 0;
+    if (this.mode === 'gl') this._initGL(); else this._init2D();
+  }
+
+  _initGL() {
+    const gl = this.gl;
+    const vs = `#version 300 es
+      in vec2 a; out vec2 vUV;
+      void main(){ vUV = vec2(a.x*0.5+0.5, 0.5-a.y*0.5); gl_Position = vec4(a,0.0,1.0); }`;
+    const fs = `#version 300 es
+      precision highp float;
+      in vec2 vUV; out vec4 o;
+      uniform sampler2D uA, uB;
+      uniform vec2 uSize;
+      uniform float uAlpha;
+      uniform vec3 uOil, uVin;
+
+      vec4 cubic(float v){
+        vec4 n = vec4(1.0,2.0,3.0,4.0) - v;
+        vec4 s = n*n*n;
+        float x = s.x;
+        float y = s.y - 4.0*s.x;
+        float z = s.z - 4.0*s.y + 6.0*s.x;
+        float w = 6.0 - x - y - z;
+        return vec4(x,y,z,w) * (1.0/6.0);
+      }
+      // cubic B-spline through 4 bilinear fetches: smooth, facet-free contours
+      float samplePhase(sampler2D tex, vec2 uv) {
+  return texture(tex, uv).r;
+}
+
+float maskAt(vec2 uv) {
+  float m = mix(
+    samplePhase(uA, uv),
+    samplePhase(uB, uv),
+    uAlpha
+  ) - 0.5;
+
+float aa = max(fwidth(m) * 0.08, 0.0001);
+  return smoothstep(-aa, aa, m);
+}
+     void main(){
+  float px = 1.0 / uSize.x;
+  float py = 1.0 / uSize.y;
+
+  float oil =
+      maskAt(vUV + vec2(-0.25 * px, -0.25 * py)) +
+      maskAt(vUV + vec2( 0.25 * px, -0.25 * py)) +
+      maskAt(vUV + vec2(-0.25 * px,  0.25 * py)) +
+      maskAt(vUV + vec2( 0.25 * px,  0.25 * py));
+
+  oil *= 0.25;
+
+  o = vec4(mix(uVin, uOil, oil), 1.0);
+}`;
+    const sh = (type, src) => {
+      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+      return s;
+    };
+    const pg = gl.createProgram();
+    gl.attachShader(pg, sh(gl.VERTEX_SHADER, vs));
+    gl.attachShader(pg, sh(gl.FRAGMENT_SHADER, fs));
+    gl.bindAttribLocation(pg, 0, 'a');
+    gl.linkProgram(pg);
+    if (!gl.getProgramParameter(pg, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pg));
+    this.pg = pg;
+    gl.useProgram(pg);
+    const buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, 1,1]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    this.u = {};
+    for (const n of ['uA', 'uB', 'uSize', 'uAlpha', 'uOil', 'uVin']) this.u[n] = gl.getUniformLocation(pg, n);
+    gl.uniform1i(this.u.uA, 0);
+    gl.uniform1i(this.u.uB, 1);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    this.texPrev = null; this.texCur = null;
+  }
+
+  _init2D() {
+    this.ctx = this.canvas.getContext('2d');
+    this.off = document.createElement('canvas');
+    this.offCtx = this.off.getContext('2d');
+  }
+
+  resize(dpr) {
+    const w = 2560;
+    const h = 1440;
+
+  if (this.canvas.width !== w || this.canvas.height !== h) {
+    this.canvas.width = w;
+    this.canvas.height = h;
+  }
+
+  if (this.mode === 'gl') {
+    this.gl.viewport(0, 0, w, h);
+    this.gl.uniform2f(this.u.uSize, w, h);
+  }
+}
+
+export4K() {
+  if (this.mode !== 'gl') {
+    this.canvas.toBlob(blob => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = 'essig-oel-wallpaper-4k.png';
+      link.href = url;
+      link.click();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+    return;
+  }
+
+  const gl = this.gl;
+
+  const oldWidth = this.canvas.width;
+  const oldHeight = this.canvas.height;
+
+  const exportWidth = 3840;
+  const exportHeight = 2160;
+
+  // Canvas temporär auf echte 4K-Größe setzen
+  this.canvas.width = exportWidth;
+  this.canvas.height = exportHeight;
+
+  gl.viewport(0, 0, exportWidth, exportHeight);
+  gl.uniform2f(this.u.uSize, exportWidth, exportHeight);
+
+  // Aktuellen Simulationszustand direkt in 4K rendern
+  this.draw(1);
+
+  // PNG aus dem 4K-WebGL-Buffer erzeugen
+  const dataURL = this.canvas.toDataURL('image/png');
+
+  // Live-Canvas wieder auf ihre normale Größe zurücksetzen
+  this.canvas.width = oldWidth;
+  this.canvas.height = oldHeight;
+
+  gl.viewport(0, 0, oldWidth, oldHeight);
+  gl.uniform2f(this.u.uSize, oldWidth, oldHeight);
+
+  const link = document.createElement('a');
+  link.download = 'essig-oel-wallpaper-4k.png';
+  link.href = dataURL;
+  link.click();
+}
+
+  setGrid(cols, rows) {
+    this.cols = cols; this.rows = rows;
+    this.bytes = new Uint8Array(cols * rows);
+    if (this.mode === 'gl') {
+      const gl = this.gl;
+      for (const t of [this.texPrev, this.texCur]) if (t) gl.deleteTexture(t);
+      const mk = () => {
+        const t = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cols, rows, 0, gl.RED, gl.UNSIGNED_BYTE, null);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        return t;
+      };
+      this.texPrev = mk(); this.texCur = mk();
+      this.primed = false;
+      
+    } else {
+      this.off.width = cols; this.off.height = rows;
+      this.img = this.offCtx.createImageData(cols, rows);
+    }
+  }
+
+  setColors(oil, vin) { this.oil = hexToRgb(oil); this.vin = hexToRgb(vin); }
+
+  /* Upload a new simulation state (called once per simulation step). */
+  push(c) {
+    const b = this.bytes, n = b.length;
+    for (let k = 0; k < n; k++) {
+      const v = (c[k] * 0.5 + 0.5) * 255 + 0.5;
+      b[k] = v < 0 ? 0 : (v > 255 ? 255 : v);
+    }
+    if (this.mode === 'gl') {
+      const gl = this.gl;
+      const t = this.texPrev; this.texPrev = this.texCur; this.texCur = t;
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, this.texCur);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.cols, this.rows, gl.RED, gl.UNSIGNED_BYTE, b);
+      if (!this.primed) {           // first frame: both textures identical
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.texPrev);
+        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.cols, this.rows, gl.RED, gl.UNSIGNED_BYTE, b);
+        this.primed = true;
+      }
+    }
+  }
+
+  draw(alpha) {
+    if (this.mode === 'gl') {
+      const gl = this.gl;
+      gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.texPrev);
+      gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texCur);
+      gl.uniform1f(this.u.uAlpha, alpha);
+      gl.uniform3fv(this.u.uOil, this.oil);
+      gl.uniform3fv(this.u.uVin, this.vin);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    } else {
+      // Canvas 2D fallback: soft threshold at sim resolution, smooth upscale
+      const d = this.img.data, b = this.bytes;
+      const o = this.oil, v = this.vin;
+      for (let k = 0, p = 0; k < b.length; k++, p += 4) {
+        let t = (b[k] - 127.5) / 127.5 * 4 * 0.5 + 0.5;
+        t = t < 0 ? 0 : (t > 1 ? 1 : t);
+        d[p]     = (v[0] + (o[0] - v[0]) * t) * 255;
+        d[p + 1] = (v[1] + (o[1] - v[1]) * t) * 255;
+        d[p + 2] = (v[2] + (o[2] - v[2]) * t) * 255;
+        d[p + 3] = 255;
+      }
+      this.offCtx.putImageData(this.img, 0, 0);
+      this.ctx.imageSmoothingEnabled = true;
+      this.ctx.imageSmoothingQuality = 'high';
+      this.ctx.drawImage(this.off, 0, 0, this.canvas.width, this.canvas.height);
+    }
+  }
+}
+
+/* =====================================================================
+   INTERACTION  (pointer = finger moving through the liquid)
+   ===================================================================== */
+class Interaction {
+  constructor(canvas, getSim, cfg) {
+    this.canvas = canvas; this.getSim = getSim; this.cfg = cfg;
+    this.has = false; this.vx = 0; this.vy = 0; this.x = 0; this.y = 0; this.t = 0;
+    const ic = cfg.interaction;
+    canvas.addEventListener('pointerdown', e => {
+      if (e.pointerType !== 'mouse') { try { canvas.setPointerCapture(e.pointerId); } catch (_) {} }
+      this.reset();
+      this._feed(e);
+    });
+    canvas.addEventListener('pointermove', e => {
+      const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : null;
+      if (evs && evs.length) for (const ev of evs) this._feed(ev); else this._feed(e);
+    });
+    const end = () => this.reset();
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    canvas.addEventListener('pointerleave', end);
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+  }
+  reset() { this.has = false; this.vx = 0; this.vy = 0; }
+
+  _feed(e) {
+    const ic = this.cfg.interaction;
+    if (!ic.enabled) return;
+    const sim = this.getSim(); if (!sim) return;
+    const r = this.canvas.getBoundingClientRect();
+    const x = (e.clientX - r.left) / r.width * sim.cols;
+    const y = (e.clientY - r.top) / r.height * sim.rows;
+    const t = e.timeStamp || performance.now();
+    if (!this.has || t - this.t > 120) {
+      this.has = true; this.x = x; this.y = y; this.t = t; this.vx = 0; this.vy = 0;
+      return;
+    }
+    const dt = Math.max(t - this.t, 4) / 1000;
+    const rvx = (x - this.x) / dt, rvy = (y - this.y) / dt;
+    const s = ic.smoothing;
+    this.vx += (rvx - this.vx) * (1 - s);
+    this.vy += (rvy - this.vy) * (1 - s);
+    const sp = Math.hypot(this.vx, this.vy);
+    if (sp > ic.maxSpeed) { const k = ic.maxSpeed / sp; this.vx *= k; this.vy *= k; }
+    sim.pushSegment(this.x, this.y, x, y, this.vx, this.vy);
+    this.x = x; this.y = y; this.t = t;
+  }
+}
+
+/* =====================================================================
+   UI + MAIN LOOP
+   ===================================================================== */
+const canvas = document.getElementById('c');
+const btn = document.getElementById('interaction');
+const oilInput = document.getElementById('oilColor');
+const vinInput = document.getElementById('vinegarColor');
+
+let sim = null;
+const renderer = new Renderer(canvas, config);
+const interaction = new Interaction(canvas, () => sim, config);
+
+function gridDims() {
+  const w = Math.max(1, window.innerWidth), h = Math.max(1, window.innerHeight);
+  const aspect = w / h;
+  const small = Math.min(w, h) < 600;
+  const N = small ? config.grid.cellsSmall : config.grid.cells;
+  const cols = Math.max(48, Math.round(Math.sqrt(N * aspect)));
+  const rows = Math.max(48, Math.round(cols / aspect));
+  return [cols, rows];
+}
+function dpr() { return Math.min(window.devicePixelRatio || 1, config.grid.maxDPR); }
+
+function applyColors() {
+  document.documentElement.style.background = config.vinegarColor;
+  document.body.style.background = config.vinegarColor;
+  renderer.setColors(config.oilColor, config.vinegarColor);
+}
+
+function setup() {
+  renderer.resize(1);
+  const [cols, rows] = gridDims();
+  if (!sim) sim = new Simulation(config, cols, rows);
+  else sim.resize(cols, rows);
+  renderer.setGrid(cols, rows);
+  renderer.push(sim.c);
+  renderer.push(sim.c);
+}
+
+let resizeTimer = 0;
+window.addEventListener('resize', () => {
+  renderer.resize(dpr());
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const [cols, rows] = gridDims();
+    if (sim && (Math.abs(cols - sim.cols) > sim.cols * 0.03 || Math.abs(rows - sim.rows) > sim.rows * 0.03)) {
+      sim.resize(cols, rows);
+      renderer.setGrid(cols, rows);
+      renderer.push(sim.c);
+      renderer.push(sim.c);
+    }
+  }, 150);
+});
+
+btn.addEventListener('click', () => {
+  config.interaction.enabled = !config.interaction.enabled;
+  btn.textContent = 'Interaction: ' + (config.interaction.enabled ? 'ON' : 'OFF');
+  btn.setAttribute('aria-pressed', String(config.interaction.enabled));
+  if (!config.interaction.enabled) { interaction.reset(); if (sim) sim.clearUser(); }
+});
+oilInput.addEventListener('input', () => { config.oilColor = oilInput.value; applyColors(); });
+vinInput.addEventListener('input', () => { config.vinegarColor = vinInput.value; applyColors(); });
+
+applyColors();
+setup();
+
+document.getElementById('export').addEventListener('click', () => {
+  renderer.export4K();
+});
+
+const STEP = 1 / config.grid.stepsPerSecond;
+let last = performance.now(), acc = 0;
+function frame(now) {
+  const dt = Math.min(0.1, (now - last) / 1000);
+  last = now;
+  acc += dt;
+  let n = 0, stepped = false;
+  while (acc >= STEP && n < 2) { sim.step(STEP); acc -= STEP; n++; stepped = true; }
+  if (acc > STEP) acc = acc % STEP;        // never spiral if the device is slow
+  if (stepped) renderer.push(sim.c);
+  renderer.draw(acc / STEP);               // interpolate between the last two states
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+})();
+</script>
+</body>
+</html>
