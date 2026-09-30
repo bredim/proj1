@@ -41,59 +41,242 @@
     -webkit-touch-callout: none;
   }
   #panel {
-    position: fixed;
-    left: max(12px, env(safe-area-inset-left, 0px));
-    bottom: max(12px, env(safe-area-inset-bottom, 0px));
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 6px 10px;
-    border-radius: 6px;
-    background: var(--panel-bg);
-    color: var(--panel-fg);
-    font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    opacity: 0.55;
-    transition: opacity 0.2s;
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  top: max(12px, env(safe-area-inset-top, 0px));
+  transform: none;
+
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+
+  padding: 12px;
+  border-radius: 6px;
+
+  background: var(--panel-bg);
+  color: var(--panel-fg);
+
+  font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  opacity: 0.55;
+  transition:
+    opacity 0.2s,
+    transform 0.25s,
+    left 0.25s;
+}
+
+#panel:hover,
+#panel:focus-within {
+  opacity: 1;
+}
+
+#panelHeader {
+  display: flex;
+  justify-content: flex-end;
+}
+
+#panel label,
+#panel button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: inherit;
+  font: inherit;
+}
+
+#panel button {
+  background: none;
+  border: 1px solid var(--panel-line);
+  border-radius: 10px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+#panelClose {
+  border: none !important;
+  padding: 0 3px !important;
+  font-size: 16px !important;
+  line-height: 1;
+}
+
+#panel input[type="color"] {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--panel-line);
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+}
+
+#panel button:focus-visible,
+#panel input:focus-visible,
+#panelToggle:focus-visible {
+  outline: 2px solid var(--panel-fg);
+  outline-offset: 2px;
+}
+
+#panelToggle {
+  position: fixed;
+  left: max(12px, env(safe-area-inset-left, 0px));
+  top: 50%;
+  transform: translateY(-50%);
+
+  display: none;
+
+  padding: 5px 9px;
+  border: 1px solid var(--panel-line);
+  border-radius: 4px;
+
+  background: var(--panel-bg);
+  color: var(--panel-fg);
+
+  font: 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+#panelToggle:hover {
+  opacity: 1;
+}
+
+#panel.is-hidden {
+  transform: translateX(-120%);
+}
+
+#panelToggle.is-visible {
+  display: block;
+}
+
+#panel input[type="range"] {
+  width: 90px;
+  height: 6px;
+  margin: 0;
+  accent-color: var(--panel-fg);
+  cursor: pointer;
+}
+
+#panel label {
+  display: grid;
+  grid-template-columns: 90px 90px;
+  align-items: center;
+  gap: 8px;
+}
+
+@media (max-width: 420px) {
+  #panel {
+    gap: 8px;
+    padding: 8px;
   }
-  #panel:hover, #panel:focus-within { opacity: 1; }
-  #panel label, #panel button {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    color: inherit;
-    font: inherit;
-  }
-  #panel button {
-    background: none;
-    border: 1px solid var(--panel-line);
-    border-radius: 4px;
-    padding: 3px 8px;
-    cursor: pointer;
-  }
-  #panel button:focus-visible, #panel input:focus-visible {
-    outline: 2px solid var(--panel-fg);
-    outline-offset: 2px;
-  }
-  #panel input[type="color"] {
-    width: 22px;
-    height: 22px;
-    padding: 0;
-    border: 1px solid var(--panel-line);
-    border-radius: 4px;
-    background: none;
-    cursor: pointer;
-  }
-  @media (max-width: 420px) { #panel { gap: 8px; padding: 6px 8px; } }
+}
+
+#interactionRow {
+  display: grid;
+  grid-template-columns: 90px 90px;
+  align-items: center;
+  gap: 8px;
+}
+
+#interaction {
+  position: relative;
+
+  width: 36px;
+  height: 20px;
+  padding: 0;
+
+  border: 1px solid var(--panel-line);
+  border-radius: 10px;
+
+  background: var(--panel-fg);
+  cursor: pointer;
+}
+
+#interaction span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+
+  width: 14px;
+  height: 14px;
+
+  border-radius: 50%;
+  background: var(--panel-bg);
+
+  transition:
+    transform 0.15s,
+    background 0.15s;
+}
+
+/* AN */
+#interaction[aria-checked="true"] {
+  background: var(--panel-fg);
+}
+
+#interaction[aria-checked="true"] span {
+  transform: translateX(16px);
+  background: var(--panel-bg);
+}
+
+/* AUS */
+#interaction[aria-checked="false"] {
+  background: var(--panel-bg);
+}
+
+#interaction[aria-checked="false"] span {
+  transform: translateX(0);
+  background: var(--panel-fg);
+}
+
+#export {
+  justify-content: center;
+  width: 100%;
+}
+
+
 </style>
 </head>
 <body>
 <canvas id="c" aria-label="Oil and vinegar simulation"></canvas>
+
+<button id="panelToggle" type="button" aria-label="Open controls">+</button>
+
 <div id="panel">
-  <button id="interaction" type="button" aria-pressed="true">Interaction: ON</button>
+  <div id="panelHeader">
+    <button id="panelClose" type="button" aria-label="Close controls">×</button>
+  </div>
+
+  <div id="interactionRow">
+    <span>Interaction</span>
+  
+    <button
+      id="interaction"
+      type="button"
+      role="switch"
+      aria-checked="true"
+      aria-label="Toggle interaction"
+    >
+      <span></span>
+    </button>
+  </div>
+  
+
+  <label>Color 1 <input id="oilColor" type="color" value="#ce647e"></label>
+  <label>Color 2 <input id="vinegarColor" type="color" value="#e5dcd1"></label>
+
+  <label>
+    Edge softness
+    <input id="softness" type="range" min="0" max="100" value="50">
+  </label>
+
+  <label>
+    Grain
+    <input id="grain" type="range" min="0" max="100" value="50">
+  </label>
+
   <button id="export" type="button">Export Wallpaper</button>
 
-  <label>Oil <input id="oilColor" type="color" value="#3a2228"></label>
-  <label>Vinegar <input id="vinegarColor" type="color" value="#d5cfc8"></label>
 </div>
 
 <script>
@@ -104,8 +287,8 @@
    CONFIGURATION
    ===================================================================== */
 const config = {
-  oilColor: '#3a2228',
-  vinegarColor: '#d5cfc8',
+  oilColor: '#ce647e',
+  vinegarColor: '#e5dcd1',
   oilRatio: 0.70,
 
   grid: {
@@ -532,7 +715,9 @@ class Renderer {
       uniform sampler2D uA, uB;
       uniform vec2 uSize;
       uniform float uAlpha;
-      uniform vec3 uOil, uVin;
+uniform float uSoftness;
+uniform float uGrain;
+uniform vec3 uOil, uVin;
 
       vec4 cubic(float v){
         vec4 n = vec4(1.0,2.0,3.0,4.0) - v;
@@ -548,15 +733,41 @@ class Renderer {
   return texture(tex, uv).r;
 }
 
-float maskAt(vec2 uv) {
-  float m = mix(
+float phaseAt(vec2 uv) {
+  return mix(
     samplePhase(uA, uv),
     samplePhase(uB, uv),
     uAlpha
-  ) - 0.5;
+  );
+}
 
-float aa = max(fwidth(m) * 0.08, 0.0001);
-  return smoothstep(-aa, aa, m);
+float grain(vec2 uv) {
+  vec2 p = uv * uSize;
+
+  // Größere Grain-Struktur
+  p *= 0.05;
+
+  float n = fract(
+    sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453
+  );
+
+  return n - 0.5;
+}
+
+float maskAt(vec2 uv) {
+  float m = phaseAt(uv) - 0.5;
+  float softness = clamp(uSoftness, 0.0, 1.0);
+
+  // 0% = harte Kante
+  if (softness <= 0.001) {
+    return step(0.0, m);
+  }
+
+  // 100% = sehr breiter, sichtbarer Farbverlauf
+  // Der Verlauf wächst deutlich mit dem Regler.
+  float radius = 0.005 + softness * 0.55;
+
+  return smoothstep(-radius, radius, m);
 }
      void main(){
   float px = 1.0 / uSize.x;
@@ -570,7 +781,12 @@ float aa = max(fwidth(m) * 0.08, 0.0001);
 
   oil *= 0.25;
 
-  o = vec4(mix(uVin, uOil, oil), 1.0);
+  vec3 color = mix(uVin, uOil, oil);
+
+float g = grain(vUV);
+color += g * uGrain * 0.18;
+
+o = vec4(color, 1.0);
 }`;
     const sh = (type, src) => {
       const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
@@ -591,7 +807,8 @@ float aa = max(fwidth(m) * 0.08, 0.0001);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     this.u = {};
-    for (const n of ['uA', 'uB', 'uSize', 'uAlpha', 'uOil', 'uVin']) this.u[n] = gl.getUniformLocation(pg, n);
+    for (const n of ['uA', 'uB', 'uSize', 'uAlpha', 'uSoftness', 'uGrain', 'uOil', 'uVin'])
+  this.u[n] = gl.getUniformLocation(pg, n);
     gl.uniform1i(this.u.uA, 0);
     gl.uniform1i(this.u.uB, 1);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -721,8 +938,10 @@ export4K() {
       gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.texPrev);
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, this.texCur);
       gl.uniform1f(this.u.uAlpha, alpha);
-      gl.uniform3fv(this.u.uOil, this.oil);
-      gl.uniform3fv(this.u.uVin, this.vin);
+gl.uniform1f(this.u.uSoftness, edgeSoftness);
+gl.uniform1f(this.u.uGrain, grainAmount);
+gl.uniform3fv(this.u.uOil, this.oil);
+gl.uniform3fv(this.u.uVin, this.vin);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     } else {
       // Canvas 2D fallback: soft threshold at sim resolution, smooth upscale
@@ -801,6 +1020,36 @@ const btn = document.getElementById('interaction');
 const oilInput = document.getElementById('oilColor');
 const vinInput = document.getElementById('vinegarColor');
 
+const panel = document.getElementById('panel');
+const panelClose = document.getElementById('panelClose');
+const panelToggle = document.getElementById('panelToggle');
+
+const softnessInput = document.getElementById('softness');
+
+let edgeSoftness = 0.5;
+
+softnessInput.addEventListener('input', () => {
+  edgeSoftness = Number(softnessInput.value) / 100;
+});
+
+const grainInput = document.getElementById('grain');
+
+let grainAmount = 0.5;
+
+grainInput.addEventListener('input', () => {
+  grainAmount = Number(grainInput.value) / 100;
+});
+
+panelClose.addEventListener('click', () => {
+  panel.classList.add('is-hidden');
+  panelToggle.classList.add('is-visible');
+});
+
+panelToggle.addEventListener('click', () => {
+  panel.classList.remove('is-hidden');
+  panelToggle.classList.remove('is-visible');
+});
+
 let sim = null;
 const renderer = new Renderer(canvas, config);
 const interaction = new Interaction(canvas, () => sim, config);
@@ -848,10 +1097,19 @@ window.addEventListener('resize', () => {
 });
 
 btn.addEventListener('click', () => {
-  config.interaction.enabled = !config.interaction.enabled;
-  btn.textContent = 'Interaction: ' + (config.interaction.enabled ? 'ON' : 'OFF');
-  btn.setAttribute('aria-pressed', String(config.interaction.enabled));
-  if (!config.interaction.enabled) { interaction.reset(); if (sim) sim.clearUser(); }
+
+config.interaction.enabled = !config.interaction.enabled;
+
+btn.setAttribute(
+  'aria-checked',
+  String(config.interaction.enabled)
+);
+
+if (!config.interaction.enabled) {
+  interaction.reset();
+  if (sim) sim.clearUser();
+}
+
 });
 oilInput.addEventListener('input', () => { config.oilColor = oilInput.value; applyColors(); });
 vinInput.addEventListener('input', () => { config.vinegarColor = vinInput.value; applyColors(); });
