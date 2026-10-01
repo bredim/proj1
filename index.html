@@ -1012,6 +1012,8 @@ class Interaction {
   }
 }
 
+
+
 /* =====================================================================
    UI + MAIN LOOP
    ===================================================================== */
@@ -1023,6 +1025,33 @@ const vinInput = document.getElementById('vinegarColor');
 const panel = document.getElementById('panel');
 const panelClose = document.getElementById('panelClose');
 const panelToggle = document.getElementById('panelToggle');
+
+const colorSets = [
+  { oil: '#ce647e', vinegar: '#e5dcd1' },
+  { oil: '#a593a4', vinegar: '#d8d0c8' },
+  { oil: '#20301c', vinegar: '#e0d5c4' },
+  { oil: '#34131a', vinegar: '#e0d5c4' },
+  { oil: '#33445a', vinegar: '#e4ddd2' }
+];
+
+const savedIndex = localStorage.getItem('essig-oel-color-index');
+const lastIndex = savedIndex === null ? -1 : Number(savedIndex);
+
+let colorIndex;
+
+do {
+  colorIndex = Math.floor(Math.random() * colorSets.length);
+} while (colorSets.length > 1 && colorIndex === lastIndex);
+
+localStorage.setItem('essig-oel-color-index', colorIndex);
+
+const colors = colorSets[colorIndex];
+
+config.oilColor = colors.oil;
+config.vinegarColor = colors.vinegar;
+
+oilInput.value = colors.oil;
+vinInput.value = colors.vinegar;
 
 const softnessInput = document.getElementById('softness');
 
